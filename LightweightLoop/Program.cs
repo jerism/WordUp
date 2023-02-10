@@ -1,38 +1,68 @@
 ﻿using Microsoft.Extensions.Configuration;
 using System;
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace LightweightLoop
 {
     internal class Program
     {
-        private static int _runningCount;
-        private static int _currentLoop;
-        private static bool _continueProgram = true;
         private static TimeSpan _totalRunTime;
+        private static TimeSpan _delayRunTime;
+        private static TimeSpan _beforeDelayTime;
         private static Stopwatch _stopwatch;
-        private static readonly WordUp _wordManager = new();
         private static Settings _settings;
 
         static void Main(string[] args)
         {
             LoadConfiguration();
+            RunApplication();
+        }
 
-            if (!_settings.ShowConsole)
+        private static void RunApplication()
+        {
+            IAppStart appStart = _settings.ApplicationType switch
             {
-                Console.SetWindowSize(1, 1);
-                Console.SetWindowPosition(0, 0);
+                "Clicker" => new ExperimentalTouch(),
+                "Words" => new WordUp(),
+                _ => throw new NotImplementedException($"Application type of {_settings.ApplicationType} has not been created"),
+            };
+
+            RunLoop(appStart);
+        }
+
+        private static void RunLoop(IAppStart appStart)
+        {
+            // Keep Alive
+            if (_settings.BeforeDelayMins > 0)
+            {
+                while (_stopwatch.Elapsed < _beforeDelayTime)
+                {
+                    appStart.Start(_settings);
+                }
+
+                _stopwatch.Restart();
             }
 
-            if (_settings.UseCountdown())
+            // Away but on
+            if (_settings.DelayMins > 0)
             {
-                _stopwatch = new Stopwatch();
-                _stopwatch.Start();
+                while (_stopwatch.Elapsed < _delayRunTime)
+                {
+                    Thread.Sleep(TimeSpan.FromSeconds(10));
+                    Interop.KeepAlive();
+                }
+
+                _stopwatch.Restart();
             }
 
-            Loop();
+            // Keep Alive
+            while (_stopwatch.Elapsed < _totalRunTime)
+            {
+                appStart.Start(_settings);
+            }
+
+            if (_settings.LockMachineOnCompletion) Interop.LockWorkStation();
         }
 
         private static void LoadConfiguration()
@@ -43,80 +73,16 @@ namespace LightweightLoop
 
             _settings = config.GetSection("settings").Get<Settings>();
             _totalRunTime = _settings.TotalRunTime();
-        }
+            _delayRunTime = _settings.DelayRunTime();
+            _beforeDelayTime = _settings.BeforeDelayTime();
+            _stopwatch = new Stopwatch();
+            _stopwatch.Start();
 
-        private static void Loop()
-        {
-            while (_continueProgram)
+            if (!_settings.ShowConsole)
             {
-                if (_settings.DisplayWords) DisplayWords();
-                if (_settings.UseCountdown()) DetermineIfEnded();
-
-                KeepAlive();
-                Thread.Sleep(500);
+                Console.SetWindowSize(1, 1);
+                Console.SetWindowPosition(0, 0);
             }
-
-            if (_settings.LockMachineOnCompletion) LockWorkStation();
-        }
-
-        private static void DisplayWords()
-        {
-            var word = GetWord();
-
-            _currentLoop++;
-            _runningCount++;
-
-            PrintToConsole(word);
-            ClearConsole();
-        }
-
-        private static void DetermineIfEnded()
-        {
-            _continueProgram = _stopwatch.Elapsed < _totalRunTime;
-        }
-
-        private static string GetWord()
-        {
-            return _settings.UseRealWords ? _wordManager.RealWord() : _wordManager.RandomWord();
-        }
-
-        private static void ClearConsole()
-        {
-            if (_settings.ClearConsole() || _currentLoop != _settings.ResetConsoleCounter) return;
-
-            _currentLoop = 0;
-            Console.Clear();
-        }
-
-        private static void PrintToConsole(string word)
-        {
-            if (!_settings.UseRealWords && _wordManager.IsARealWord(word))
-            {
-                Console.WriteLine($"Congrats '{word}' is a real word. It took you {_runningCount} attempts");
-                return;
-            }
-
-            Console.WriteLine(word);
-        }
-
-        [DllImport("user32.dll")]
-        public static extern bool LockWorkStation();
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        static extern uint SetThreadExecutionState(EXECUTION_STATE esFlags);
-
-        private static void KeepAlive()
-        {
-            SetThreadExecutionState(EXECUTION_STATE.ES_CONTINUOUS | EXECUTION_STATE.ES_DISPLAY_REQUIRED | EXECUTION_STATE.ES_SYSTEM_REQUIRED);
-        }
-
-        [Flags]
-        public enum EXECUTION_STATE : uint
-        {
-            ES_AWAYMODE_REQUIRED = 0x00000040,
-            ES_CONTINUOUS = 0x80000000,
-            ES_DISPLAY_REQUIRED = 0x00000002,
-            ES_SYSTEM_REQUIRED = 0x00000001
         }
     }
 }
